@@ -14,6 +14,10 @@ sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 sock.connect(my_id)
 
 last = 0
+cmode = "follower"
+voteg = False
+term = 0
+ctimeout = 0
 
 while True:
    ready = select.select([sock], [], [], 0.1)[0]

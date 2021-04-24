@@ -19,7 +19,7 @@ voteg = False
 term = 0
 
 ctimeout = random.randrange(100, 200)
-ctimeout = ctimeout * 0.0005 
+ctimeout = ctimeout * 0.005 
 
 cvote = 0
 leader = 'FFFF' # keep track of current leader
@@ -47,50 +47,59 @@ def set_timeout():
 
 
 
+
 while True:
    ready = select.select([sock], [], [], 0.1)[0]
 
    if sock in ready:
       msg_raw = sock.recv(32768)
-
       
+      if len(msg_raw) == 0: continue
+      msg = json.loads(msg_raw)
+
       #In election
       if leader == 'FFFF':
          print "IN ELECTION"
+        
+
+         
          pmsg = msg
          if cmode == "follower":
             if msg['type'] in ['get', 'put']:
-               #if msg['type'] == 'get':
-               #   try:
-               #      val = our_dict[pmsg['key']] # get the key value
-               #   except:
-               #      val = ''
-               #else:
-                  #our_dict[pmsg['key']] = pmsg['value']
                if msg['type'] == 'put':
                   our_dict[pmsg['key']] = pmsg['value']
-                  #print '\n\n\n\n\nPUT IN ELECTION\n\n\n\n\n'
               
-               res_msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'fail', 'MID': pmsg['MID']}
+               res_msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'fail', 'term': term, 'MID': pmsg['MID']}
             
             elif msg['type'] == 'rvote':
-               res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'voted': False}
+               print "Requesting vote to follower: " + str(msg['src']) + " to " + str(my_id)
+               res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'term': term, 'voted': False}
             sock.send(json.dumps(res_msg))
+            #continue
+
  
          if cmode == 'candidate':
             if msg['type'] in ['get', 'put']:
-               res_msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'fail', 'MID': pmsg['MID']}
+               res_msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'fail', 'term': term, 'MID': pmsg['MID']}
        
                sock.send(json.dumps(res_msg))
             #request vote
             elif msg['type'] == 'rvote':
-               res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'voted': False}
-            
+               print 'myid: ' + str(my_id)
+               print str(msg)
+               print "Requesting vote to candidate: " + str(msg['src']) + " to " + str(my_id)
+               res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'term': term, 'voted': False}
+               if msg['term'] > term:
+                  cmode = 'follower'
+                  term = msg['term']
+                  res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'term': term, 'voted': True}
+               
                sock.send(json.dumps(res_msg))
             #ack vote
             elif msg['type'] == 'lvote':
                if msg['voted']:
                   cvote += 1
+                
 
             #have majority voted
             if cvote >= len(replica_ids) + 1 / 2:
@@ -98,24 +107,47 @@ while True:
                cmode = 'leader'
                print '\n\n\n\n\nELECTION IS OVER: ' + str(leader) + '\n\n\n\n'
                for replica in replica_ids:
-                  msg = {'src': my_id, 'dst': replica, 'leader': leader, 'type': 'appendEntries'}
+                  msg = {'src': my_id, 'dst': replica, 'term': term, 'leader': leader, 'type': 'appendEntries'}
                   sock.send(json.dumps(msg))
 
 
                last = time.time()
-
-            
+               
 
          if pmsg['type'] == 'appendEntries':
-            leader = pmsg['src']
-            msg = {'src': my_id, 'dst': leader, 'leader': leader, 'type': 'appResponse'}
-            sock.send(json.dumps(msg))
-            cmode = 'follower'
+            if pmsg['term'] >= term:
+                              
+               leader = pmsg['src']
+               print 'APPEND LEADER: ' + leader
+               term = pmsg['term']
+
+               msg = {'src': my_id, 'dst': leader, 'leader': leader, 'term': term, 'type': 'appResponse'}
+               sock.send(json.dumps(msg))
+               cmode = 'follower'
+#ELECTION TIME OUT - RESET
+         if clock - last >= ctimeout:
+            cmode = 'candidate'
+            term += 1
+               
+            set_timeout()
+            for replica in replica_ids:
+               print 'my_id: ' + str(my_id)
+               print 'replica: ' + str(replica)
+               if my_id != replica:
+                  msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'type': 'rvote'}
+               
+
+                  if msg['term'] > term:
+                     term = msg['term']
+
+                     sock.send(json.dumps(msg))
+
+ 
+
          last = time.time()
-         
+         continue   
       
-      if len(msg_raw) == 0: continue
-      msg = json.loads(msg_raw)
+      
       # For now, ignore get() and put() from clients
       if cmode == "follower":
          if msg['type'] in ['get', 'put']:
@@ -123,75 +155,88 @@ while True:
             if pmsg['dst'] != pmsg['leader']:
                
                #cmode = "candidate"
-               msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'redirect', 'MID': pmsg['MID']}
+               msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'redirect', 'term': term, 'MID': pmsg['MID']}
+               print 'pmsg[dst]: ' + str(pmsg['dst'])
+               print 'REDIRECTING FOLLOWER'
+               print 'CURRENT LEADER: ' + leader
+               print 'CURRENT TERM: ' + str(term)
 
-               print 'REDIRECTING F'
-               #print 'MSG:' + str(msg)
             else:
                
-               msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'fail', 'MID': pmsg['MID']}
+               msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'fail', 'term': term, 'MID': pmsg['MID']}
                print(str(msg))
 
             print '%s received a GET/PUT from %s' % (msg['dst'], msg['src'])
             sock.send(json.dumps(msg))
             pass
          if msg['type'] == 'rvote':
-            if not voteg:
+            if not voteg and msg['term'] > term:
                leader = 'FFFF'
                print str(my_id) + ' received a request vote!'
                # send a vote to the source
-               term += 1
+               
+               term = msg['term']
+               
                voteg = True
-               res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'voted': True}
+               res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'term': term, 'voted': True}
             else:
-               res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'voted': False}
+               res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'term': term, 'voted': False}
                                 # Handle noop messages. This may be removed from your final implementation
          clock = time.time()
-         if msg['type'] == 'appendEntries':
+         if msg['type'] == 'appendEntries' and msg['term'] >= term:
             #record start of heartbeat
             print 'RESET HEARTBEAT OF ' + str(my_id)
             last = clock
+            if msg['term'] > term:
+               term = msg['term']
+               cmode = 'follower'
+            
          if clock - last > ctimeout:
             print 'ctimeout: ' +  str(ctimeout)
             print '\n\n\n\nclock-last:' + str(clock - last) + '\n\n\n\n'
             #start election
             leader = 'FFFF'
+
+            term += 1
+
             cmode = 'candidate'
             set_timeout()
             for replica in replica_ids:
-               msg = {'src': my_id, 'dst': replica, 'leader': leader, 'type': 'rvote'}
-               sock.send(json.dumps(msg))
-       
+               print 'my_id: ' + str(my_id)
+               print 'replica: ' + str(replica)
+               if my_id != replica:
+                  msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'type': 'rvote'}
+               
+
+                  if msg['term'] > term:
+                     term = msg['term']
+               
+                     sock.send(json.dumps(msg))
 
          elif msg['type'] == 'noop':
             print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
                                 # Handle noop messages. This may be removed from your final implementation
             # increment votes
       elif cmode == "leader":
+         print 'LEADER IS UP: ' + str(my_id)
          if msg['type'] in ['get', 'put']:
-            #lead = 0
-            print "LEADER IS " + str(my_id)
             pmsg = msg
             if pmsg['dst'] != pmsg['leader']:
                #rlead = 'FFFF' #real leader
-               msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'redirect', 'MID': pmsg['MID']}
+               msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'redirect', 'term': term, 'MID': pmsg['MID']}
                print 'REDIRECTING L'
             else:
                if msg['type'] == 'get':
                   try:
                      val = our_dict[pmsg['key']] # get the key value
-                     
-
-                     #msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'ok', 'MID': pmsg['MID'], 'value': val} # was originally a fail type
                   except:
                      val = ''
-                     #msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'fail', 'MID': pmsg['MID']}
-                  msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'ok', 'MID': pmsg['MID'], 'value': val} # was originally a fail type
+                  msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'ok', 'term': term, 'MID': pmsg['MID'], 'value': val} # was originally a fail type
                elif msg['type'] == 'put':
                   our_dict[pmsg['key']] = pmsg['value']
-                  msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'ok', 'MID': pmsg['MID']} 
+                  msg = {'src': my_id, 'dst': pmsg['src'], 'leader': leader, 'type': 'ok', 'term': term, 'MID': pmsg['MID']} 
                
-
+ 
                #LEADER RECIEVES REQUEST VOTE
                elif msg['type'] == 'rvote':
                   cmode == 'follower'
@@ -199,42 +244,37 @@ while True:
                      leader = 'FFFF'
                      print str(my_id) + ' received a request vote!'
                      # send a vote to the source
-                     term += 1
+                     term = msg['term']
                      voteg = True
-                     res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'voted': True}
+                     res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'term': term, 'voted': True}
                   else:
-                     res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'voted': False}
-                  
+                     res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'term': term, 'voted': False}
 
-
-               
-               #print 'FAIL'
-               print(str(msg))
+               #print(str(msg))
             print '%s received a GET/PUT from %s in Leader' % (msg['dst'], msg['src'])
             sock.send(json.dumps(msg))
             pass
-         elif msg['type'] == 'rvote':
-            res_msg = {'src': my_id, 'dts': msg['src'], 'leader': leader, 'type': 'lvote', 'voted': False}
-         elif msg['type'] == 'lvote':
-             if msg['voted'] == True:
-                cvote += 1
                                 # Handle noop messages. This may be removed from your final implementation
+         elif msg['type'] == 'appendEntries':
+            if msg['term'] >= term:
+               cmode = 'follower'
+               leader = msg['src']
+   
          elif msg['type'] == 'noop':
             print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
    clock = time.time()
    if clock-last > 0.03 and my_id == leader:
       for replica in replica_ids:
-         msg = {'src': my_id, 'dst': replica, 'leader': leader, 'type': 'appendEntries'}
-         sock.send(json.dumps(msg))
-         
-   last = clock
+         msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'type': 'appendEntries'}
+         sock.send(json.dumps(msg)) 
+      last = clock
    
 
 
 if clock-last > 2:
    # Send a no-op message to a random peer every two seconds, just for fun
    # You definitely want to remove this from your implementation
-   msg = {'src': my_id, 'dst': random.choice(replica_ids), 'leader': 'FFFF', 'type': 'noop'}
+   msg = {'src': my_id, 'dst': random.choice(replica_ids), 'leader': 'FFFF', 'term': term, 'type': 'noop'}
    sock.send(json.dumps(msg))
    print '%s sending a NOOP to %s' % (msg['src'], msg['dst'])
    last = clock

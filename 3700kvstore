@@ -221,11 +221,15 @@ while True:
                sock.send(json.dumps(res_msg))
             else:
                #res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'commit', 'MID': msg['MID'], 'value': msg['value'], 'key': msg['key']}
-               uncoment[msg['MID']] = 0
+
+               uncoment[msg['MID']] = [0, time.time(), msg]
+               
+
                #res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'ok', 'MID': msg['MID']}
                #sock.send(json.dumps(res_msg))
                #temp_dict = {}
                #temp_dict[msg['key']] = msg['value']
+
                for replica in replica_ids:
                   if my_id != replica:
                      res_msg = {'src': my_id, 'dst': replica, 'osrc': msg['src'], 'leader': leader, 'type': 'commit', 'MID': msg['MID'], 'value': msg['value'], 'key': msg['key']}
@@ -272,24 +276,54 @@ while True:
             leader = msg['src']
             continue
          elif msg['type'] == 'okcommit':
-            uncoment[msg['MID']] += 1
+            #uncoment[msg['MID']][0] += 1
+            #uncoment[msg['MID']][1] = time.time(i)
+         
+            #tempmid = uncoment[msg['MID']]
+            try:
+               tempnum = uncoment[msg['MID']][0] + 1
+               tempmsg = uncoment[msg['MID']][2]
 
-            if uncoment[msg['MID']] == len(replica_ids) / 2:
-
-               our_dict[msg['key']] = msg['value']
+               #print 'Uncoment: ' + str(tempnum)           
+ 
+               uncoment[msg['MID']] = [tempnum, time.time(), tempmsg]
             
-               res_msg = {'src': my_id, 'dst': msg['osrc'], 'leader': leader, 'type': 'ok', 'MID': msg['MID'], 'value': msg['value']}
+                
+               if uncoment[msg['MID']][0] == len(replica_ids) / 2:
+                  #remove from uncommited
+                  del uncoment[msg['MID']]
+
+                  our_dict[msg['key']] = msg['value']
+            
+                  res_msg = {'src': my_id, 'dst': msg['osrc'], 'leader': leader, 'type': 'ok', 'MID': msg['MID'], 'value': msg['value']}
+                  sock.send(json.dumps(res_msg))
+
+                  temp_dict = {}
+                  temp_dict[msg['key']] = msg['value']
+                  for replica in replica_ids:
+                     if my_id != replica:
+                        res_msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'type': 'appendEntries', 'log': temp_dict}
+                        sock.send(json.dumps(res_msg))
+            except:
+               pass
+   
+         tempcom = []
+         for com in uncoment:
+            if time.time() - uncoment[com][1] >= 3:
+
+               print 'COMMIT TIME: ' + str(uncoment[com][1])
+               print 'CURRENT TIME: ' + str(time.time())
+               res_msg = {'src': my_id, 'dst': uncoment[com][2]['src'], 'leader': leader, 'type': 'fail', 'MID': uncoment[com][2]['MID']}
                sock.send(json.dumps(res_msg))
+               tempcom.append(com)
 
-               temp_dict = {}
-               temp_dict[msg['key']] = msg['value']
-               for replica in replica_ids:
-                  if my_id != replica:
-                     res_msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'type': 'appendEntries', 'log': temp_dict}
-                     sock.send(json.dumps(res_msg))
-           
+         
+         
+         for com in tempcom:
+            del uncoment[com]
 
 
+         
          clock = time.time()
          if clock-last > 0.03:
             last = clock

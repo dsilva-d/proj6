@@ -27,7 +27,9 @@ our_dict = {}
 heart = 0
 getq = []
 putq = []
-dent = []
+dent = [] #logs
+uncoment = {} #uncommited logs
+
 
 #if my_id == '0000':
 #   cmode = "leader"
@@ -76,7 +78,7 @@ while True:
          elif msg['type'] == 'rvote': 
             last = time.time()
             # Vote in runoff if haven't yet
-            if term < msg['term']:
+            if term < msg['term'] and msg['loglen'] >= len(our_dict):
                cvote = 0
                cmode = 'follower'
                term = msg['term']
@@ -130,7 +132,7 @@ while True:
                last = time.time()
                for replica in replica_ids:
                   if my_id != replica:
-                     res_msg = {'src': my_id, 'dst': replica, 'term': term, 'leader': leader, 'type': 'appendEntries', 'log': None}
+                     res_msg = {'src': my_id, 'dst': replica, 'term': term, 'leader': leader, 'type': 'appendEntries', 'log': dent}
                      sock.send(json.dumps(res_msg))
                continue
                
@@ -147,7 +149,7 @@ while True:
             last = time.time()
             for replica in replica_ids:
                   if my_id != replica:
-                     res_msg = {'src': my_id, 'dst': replica, 'term': term, 'leader': leader, 'type': 'rvote'}
+                     res_msg = {'src': my_id, 'dst': replica, 'term': term, 'leader': leader, 'loglen': len(our_dict), 'type': 'rvote'}
                      sock.send(json.dumps(res_msg))
 
          continue   
@@ -155,7 +157,6 @@ while True:
 
       ########## END ELECTION ##########
 
-      #print('Not in election')
 
       if cmode == 'follower':
          if msg['type'] in ['get', 'put']:
@@ -166,7 +167,7 @@ while True:
             leader = 'FFFF'
             cvote = 0
             last = time.time()
-            if msg['term'] > term:
+            if msg['term'] > term and msg['loglen'] >= len(our_dict):
                term = msg['term']
                res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'lvote', 'term': term, 'voted': True}
                sock.send(json.dumps(res_msg))
@@ -184,6 +185,9 @@ while True:
                #print 'updated dictionary'
             except:
                pass
+         elif msg['type'] == 'commit':
+            res_msg = {'src': my_id, 'dst': msg['src'], 'osrc': msg['osrc'], 'leader': msg['src'], 'type': 'okcommit', 'MID': msg['MID'], 'value': msg['value'], 'key': msg['key']}
+            sock.send(json.dumps(res_msg))
 
          clock = time.time()
          if clock-last >= ctimeout:
@@ -196,7 +200,7 @@ while True:
             last = time.time()
             for replica in replica_ids:
                if my_id != replica:
-                  res_msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'type': 'rvote'}
+                  res_msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'loglen': len(our_dict), 'type': 'rvote'}
                   sock.send(json.dumps(res_msg))
 
 
@@ -210,17 +214,22 @@ while True:
                   val = our_dict[msg['key']]
                except:
                   val = ''
+               
                res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'ok', 'MID': msg['MID'], 'value': val}
+               
+
                sock.send(json.dumps(res_msg))
             else:
-               our_dict[msg['key']] = msg['value']
-               res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'ok', 'MID': msg['MID']}
-               sock.send(json.dumps(res_msg))
-               temp_dict = {}
-               temp_dict[msg['key']] = msg['value']
+               #res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'commit', 'MID': msg['MID'], 'value': msg['value'], 'key': msg['key']}
+               uncoment[msg['MID']] = 0
+               #res_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader, 'type': 'ok', 'MID': msg['MID']}
+               #sock.send(json.dumps(res_msg))
+               #temp_dict = {}
+               #temp_dict[msg['key']] = msg['value']
                for replica in replica_ids:
                   if my_id != replica:
-                     res_msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'type': 'appendEntries', 'log': temp_dict}
+                     res_msg = {'src': my_id, 'dst': replica, 'osrc': msg['src'], 'leader': leader, 'type': 'commit', 'MID': msg['MID'], 'value': msg['value'], 'key': msg['key']}
+                     #res_msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'type': 'appendEntries', 'log': temp_dict}
                      sock.send(json.dumps(res_msg))
 
          ### Very unsure of this part ### 
@@ -247,7 +256,7 @@ while True:
          ################################
 
          elif msg['type'] == 'rvote':
-            if msg['term'] > term:
+            if msg['term'] > term and msg['loglen'] >= len(our_dict):
                cmode = 'follower'
                last = time.time()
                leader = 'FFFF'
@@ -262,13 +271,31 @@ while True:
             cmode = 'follower'
             leader = msg['src']
             continue
+         elif msg['type'] == 'okcommit':
+            uncoment[msg['MID']] += 1
+
+            if uncoment[msg['MID']] == len(replica_ids) / 2:
+
+               our_dict[msg['key']] = msg['value']
+            
+               res_msg = {'src': my_id, 'dst': msg['osrc'], 'leader': leader, 'type': 'ok', 'MID': msg['MID'], 'value': msg['value']}
+               sock.send(json.dumps(res_msg))
+
+               temp_dict = {}
+               temp_dict[msg['key']] = msg['value']
+               for replica in replica_ids:
+                  if my_id != replica:
+                     res_msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'type': 'appendEntries', 'log': temp_dict}
+                     sock.send(json.dumps(res_msg))
+           
+
 
          clock = time.time()
          if clock-last > 0.03:
             last = clock
             for replica in replica_ids:
                if my_id != replica:
-                  res_msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'type': 'appendEntries', 'log': None}
+                  res_msg = {'src': my_id, 'dst': replica, 'leader': leader, 'term': term, 'type': 'appendEntries', 'log': None} #time out should reset log?
                   sock.send(json.dumps(res_msg))
 
          for p in putq:
